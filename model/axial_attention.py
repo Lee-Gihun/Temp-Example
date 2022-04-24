@@ -5,11 +5,14 @@ from .reversible import ReversibleSequence
 
 # helper functions
 
+
 def exists(val):
     return val is not None
 
+
 def map_el_ind(arr, ind):
     return list(map(itemgetter(ind), arr))
+
 
 def sort_and_return_indices(arr):
     indices = [ind for ind in range(len(arr))]
@@ -17,8 +20,10 @@ def sort_and_return_indices(arr):
     arr = sorted(arr)
     return map_el_ind(arr, 0), map_el_ind(arr, 1)
 
+
 # calculates the permutation to bring the input tensor to something attend-able
 # also calculates the inverse permutation to bring the tensor back to its original shape
+
 
 def calculate_permutations(num_dimensions, emb_dim):
     total_dimensions = num_dimensions + 2
@@ -32,19 +37,22 @@ def calculate_permutations(num_dimensions, emb_dim):
         dims_rest = set(range(0, total_dimensions)) - set(last_two_dims)
         permutation = [*dims_rest, *last_two_dims]
         permutations.append(permutation)
-      
+
     return permutations
 
+
 # helper classes
+
 
 class Rezero(nn.Module):
     def __init__(self, fn):
         super().__init__()
         self.fn = fn
-        self.g = nn.Parameter(torch.tensor(0.))
+        self.g = nn.Parameter(torch.tensor(0.0))
 
     def forward(self, x):
         return self.fn(x) * self.g
+
 
 class Sequential(nn.Module):
     def __init__(self, blocks):
@@ -55,6 +63,7 @@ class Sequential(nn.Module):
         for f, g in self.blocks:
             x = x + f(x) + g(x)
         return x
+
 
 class PermuteToFrom(nn.Module):
     def __init__(self, permutation, fn):
@@ -81,11 +90,12 @@ class PermuteToFrom(nn.Module):
         axial = axial.permute(*self.inv_permutation).contiguous()
         return axial
 
+
 # axial pos emb
-# Modified to apply only on 2D positional embedding. 
+# Modified to apply only on 2D positional embedding.
 # Currently there is a buf when using nn.ParameterList in DP.
 class AxialPositionalEmbedding(nn.Module):
-    def __init__(self, dim, shape, emb_dim_index = 1):
+    def __init__(self, dim, shape, emb_dim_index=1):
         super().__init__()
         self.dim = dim
         self.shape = shape
@@ -101,66 +111,90 @@ class AxialPositionalEmbedding(nn.Module):
             parameters.append(parameter)
 
         for i in range(len(ax_dim_indexes)):
-            setattr(self, f'params_{i}', parameters[i])
+            setattr(self, f"params_{i}", parameters[i])
 
     def forward(self, x):
 
         for i in range(len(self.shape)):
-            x = x + getattr(self, f'params_{i}')
-        #for param in self.params:
+            x = x + getattr(self, f"params_{i}")
+        # for param in self.params:
         #    x = x + param
         return x
 
+
 # attention
 
+
 class SelfAttention(nn.Module):
-    def __init__(self, dim, heads, dim_heads = None):
+    def __init__(self, dim, heads, dim_heads=None):
         super().__init__()
         self.dim_heads = (dim // heads) if dim_heads is None else dim_heads
         dim_hidden = self.dim_heads * heads
 
         self.heads = heads
-        self.to_q = nn.Linear(dim, dim_hidden, bias = False)
-        self.to_kv = nn.Linear(dim, 2 * dim_hidden, bias = False)
+        self.to_q = nn.Linear(dim, dim_hidden, bias=False)
+        self.to_kv = nn.Linear(dim, 2 * dim_hidden, bias=False)
         self.to_out = nn.Linear(dim_hidden, dim)
 
-    def forward(self, x, kv = None):
+    def forward(self, x, kv=None):
         kv = x if kv is None else kv
         q, k, v = (self.to_q(x), *self.to_kv(kv).chunk(2, dim=-1))
 
         b, t, d, h, e = *q.shape, self.heads, self.dim_heads
 
-        merge_heads = lambda x: x.reshape(b, -1, h, e).transpose(1, 2).reshape(b * h, -1, e)
+        merge_heads = (
+            lambda x: x.reshape(b, -1, h, e).transpose(1, 2).reshape(b * h, -1, e)
+        )
         q, k, v = map(merge_heads, (q, k, v))
 
-        dots = torch.einsum('bie,bje->bij', q, k) * (e ** -0.5)
+        dots = torch.einsum("bie,bje->bij", q, k) * (e ** -0.5)
         dots = dots.softmax(dim=-1)
-        out = torch.einsum('bij,bje->bie', dots, v)
+        out = torch.einsum("bij,bje->bie", dots, v)
 
         out = out.reshape(b, h, -1, e).transpose(1, 2).reshape(b, -1, d)
         out = self.to_out(out)
         return out
 
+
 # axial attention class
 
+
 class AxialAttention(nn.Module):
-    def __init__(self, dim, num_dimensions = 2, heads = 8, dim_heads = None, dim_index = -1, sum_axial_out = True):
-        assert (dim % heads) == 0, 'hidden dimension must be divisible by number of heads'
+    def __init__(
+        self,
+        dim,
+        num_dimensions=2,
+        heads=8,
+        dim_heads=None,
+        dim_index=-1,
+        sum_axial_out=True,
+    ):
+        assert (
+            dim % heads
+        ) == 0, "hidden dimension must be divisible by number of heads"
         super().__init__()
         self.dim = dim
         self.total_dimensions = num_dimensions + 2
-        self.dim_index = dim_index if dim_index > 0 else (dim_index + self.total_dimensions)
+        self.dim_index = (
+            dim_index if dim_index > 0 else (dim_index + self.total_dimensions)
+        )
 
         attentions = []
         for permutation in calculate_permutations(num_dimensions, dim_index):
-            attentions.append(PermuteToFrom(permutation, SelfAttention(dim, heads, dim_heads)))
+            attentions.append(
+                PermuteToFrom(permutation, SelfAttention(dim, heads, dim_heads))
+            )
 
         self.axial_attentions = nn.ModuleList(attentions)
         self.sum_axial_out = sum_axial_out
 
     def forward(self, x):
-        assert len(x.shape) == self.total_dimensions, 'input tensor does not have the correct number of dimensions'
-        assert x.shape[self.dim_index] == self.dim, 'input tensor does not have the correct input dimension'
+        assert (
+            len(x.shape) == self.total_dimensions
+        ), "input tensor does not have the correct number of dimensions"
+        assert (
+            x.shape[self.dim_index] == self.dim
+        ), "input tensor does not have the correct input dimension"
 
         if self.sum_axial_out:
             return sum(map(lambda axial_attn: axial_attn(x), self.axial_attentions))
@@ -170,27 +204,49 @@ class AxialAttention(nn.Module):
             out = axial_attn(out)
         return out
 
+
 # axial image transformer
 
+
 class AxialImageTransformer(nn.Module):
-    def __init__(self, dim, depth, heads = 8, dim_heads = None, dim_index = 1, reversible = True, axial_pos_emb_shape = None):
+    def __init__(
+        self,
+        dim,
+        depth,
+        heads=8,
+        dim_heads=None,
+        dim_index=1,
+        reversible=True,
+        axial_pos_emb_shape=None,
+    ):
         super().__init__()
         permutations = calculate_permutations(2, dim_index)
 
         get_ff = lambda: nn.Sequential(
             nn.Conv2d(dim, dim, 3, padding=1),
             nn.LeakyReLU(inplace=True),
-            nn.Conv2d(dim, dim, 3, padding=1)
+            nn.Conv2d(dim, dim, 3, padding=1),
         )
 
-        self.pos_emb = AxialPositionalEmbedding(dim, axial_pos_emb_shape, dim_index) if exists(axial_pos_emb_shape) else nn.Identity()
+        self.pos_emb = (
+            AxialPositionalEmbedding(dim, axial_pos_emb_shape, dim_index)
+            if exists(axial_pos_emb_shape)
+            else nn.Identity()
+        )
 
         layers = nn.ModuleList([])
         for _ in range(depth):
-            attn_functions = nn.ModuleList([PermuteToFrom(permutation, Rezero(SelfAttention(dim, heads, dim_heads))) for permutation in permutations])
+            attn_functions = nn.ModuleList(
+                [
+                    PermuteToFrom(
+                        permutation, Rezero(SelfAttention(dim, heads, dim_heads))
+                    )
+                    for permutation in permutations
+                ]
+            )
             conv_functions = nn.ModuleList([Rezero(get_ff()), Rezero(get_ff())])
             layers.append(attn_functions)
-            layers.append(conv_functions)            
+            layers.append(conv_functions)
 
         execute_type = ReversibleSequence if reversible else Sequential
         self.layers = execute_type(layers)

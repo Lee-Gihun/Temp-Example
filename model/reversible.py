@@ -19,7 +19,7 @@ class Deterministic(nn.Module):
             self.cuda_in_fwd = True
             self.gpu_devices, self.gpu_states = get_device_states(*args)
 
-    def forward(self, *args, record_rng = False, set_rng = False, **kwargs):
+    def forward(self, *args, record_rng=False, set_rng=False, **kwargs):
         if record_rng:
             self.record_rng(*args)
 
@@ -36,6 +36,7 @@ class Deterministic(nn.Module):
                 set_device_states(self.gpu_devices, self.gpu_states)
             return self.net(*args, **kwargs)
 
+
 # heavily inspired by https://github.com/RobinBruegger/RevTorch/blob/master/revtorch/revtorch.py
 # once multi-GPU is confirmed working, refactor and send PR back to source
 class ReversibleBlock(nn.Module):
@@ -44,7 +45,7 @@ class ReversibleBlock(nn.Module):
         self.f = Deterministic(f)
         self.g = Deterministic(g)
 
-    def forward(self, x, f_args = {}, g_args = {}):
+    def forward(self, x, f_args={}, g_args={}):
         x1, x2 = torch.chunk(x, 2, dim=2)
         y1, y2 = None, None
 
@@ -54,7 +55,7 @@ class ReversibleBlock(nn.Module):
 
         return torch.cat([y1, y2], dim=2)
 
-    def backward_pass(self, y, dy, f_args = {}, g_args = {}):
+    def backward_pass(self, y, dy, f_args={}, g_args={}):
         y1, y2 = torch.chunk(y, 2, dim=2)
         del y
 
@@ -92,6 +93,7 @@ class ReversibleBlock(nn.Module):
 
         return x, dx
 
+
 class IrreversibleBlock(nn.Module):
     def __init__(self, f, g):
         super().__init__()
@@ -103,6 +105,7 @@ class IrreversibleBlock(nn.Module):
         y1 = x1 + self.f(x2, **f_args)
         y2 = x2 + self.g(y1, **g_args)
         return torch.cat([y1, y2], dim=2)
+
 
 class _ReversibleFunction(Function):
     @staticmethod
@@ -122,12 +125,15 @@ class _ReversibleFunction(Function):
             y, dy = block.backward_pass(y, dy, **kwargs)
         return dy, None, None
 
+
 class ReversibleSequence(nn.Module):
-    def __init__(self, blocks, ):
+    def __init__(
+        self, blocks,
+    ):
         super().__init__()
         self.blocks = nn.ModuleList([ReversibleBlock(f, g) for (f, g) in blocks])
 
-    def forward(self, x, arg_route = (True, True), **kwargs):
+    def forward(self, x, arg_route=(True, True), **kwargs):
         f_args, g_args = map(lambda route: kwargs if route else {}, arg_route)
-        block_kwargs = {'f_args': f_args, 'g_args': g_args}
+        block_kwargs = {"f_args": f_args, "g_args": g_args}
         return _ReversibleFunction.apply(x, self.blocks, block_kwargs)
