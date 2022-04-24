@@ -22,16 +22,14 @@ Temporary Example for Clean Code
 8. Test: 테스트 코트, 리펙토링 테스트 코드 추가
 9. Hotfix : 긴급하게 Master Branch로 수정사항 반영이 필요한 경우
 
-** Commit Message 예시 **
+**Commit Message 예시**
 
----
 
 Fix - 모델 input shape 오류 수정
 
 Refactor - Data Pipeline 변경
 
 Style - Black Implemented
-
 ---
 
 ## Code Formatting을 위한 규칙
