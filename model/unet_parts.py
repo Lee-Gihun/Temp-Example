@@ -9,7 +9,8 @@ import torch.nn.functional as F
 import numpy as np
 from typing import Tuple
 
-__all__ = ['BasicConv', 'Down', 'Up', 'OutConv', 'LearnablePosition', 'LCN2DLayer']
+__all__ = ["BasicConv", "Down", "Up", "OutConv", "LearnablePosition", "LCN2DLayer"]
+
 
 class BasicConv(nn.Module):
     def __init__(self, in_channels, out_channels, residual=True):
@@ -17,25 +18,32 @@ class BasicConv(nn.Module):
 
         # Main block
         self.basic_conv = nn.Sequential()
-        self.basic_conv.add_module('basic_conv1',
-                                   nn.Conv2d(in_channels, out_channels,
-                                             kernel_size=3, padding=1, bias=False))
-        self.basic_conv.add_module('basic_bn',
-                                   nn.BatchNorm2d(out_channels, track_running_stats=False))
-        self.basic_conv.add_module('basic_relu', nn.LeakyReLU(inplace=True))
-        self.basic_conv.add_module('basic_conv2',
-                                   nn.Conv2d(out_channels, out_channels,
-                                             kernel_size=3, padding=1, bias=False))
+        self.basic_conv.add_module(
+            "basic_conv1",
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
+        )
+        self.basic_conv.add_module(
+            "basic_bn", nn.BatchNorm2d(out_channels, track_running_stats=False)
+        )
+        self.basic_conv.add_module("basic_relu", nn.LeakyReLU(inplace=True))
+        self.basic_conv.add_module(
+            "basic_conv2",
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
+        )
 
         # Residual block
         self.residual = None
-        if residual==True:
+        if residual == True:
             self.residual = nn.Sequential()
-            self.residual.add_module("res_conv",
-                                    nn.Conv2d(in_channels, out_channels,
-                                            kernel_size=1, padding=0, bias=False))
-            self.residual.add_module("res_bn",
-                                    nn.BatchNorm2d(out_channels, track_running_stats=False))
+            self.residual.add_module(
+                "res_conv",
+                nn.Conv2d(
+                    in_channels, out_channels, kernel_size=1, padding=0, bias=False
+                ),
+            )
+            self.residual.add_module(
+                "res_bn", nn.BatchNorm2d(out_channels, track_running_stats=False)
+            )
 
     def forward(self, x):
         out = self.basic_conv(x)
@@ -47,38 +55,43 @@ class BasicConv(nn.Module):
 
         return out
 
+
 class DoubleConv(nn.Module):
     """
     ([BN] => LReLU => convolution) * 2
     In downsampling, first convolution is changed to MaxPool
     """
+
     def __init__(self, in_channels, out_channels, mid_channels=None, residual=True):
         super(DoubleConv, self).__init__()
 
         if not mid_channels:
             mid_channels = out_channels
-        
+
         # Main block
         self.double_conv = nn.Sequential()
-        self.double_conv.add_module("conv1",
-                                    nn.Conv2d(in_channels, mid_channels,
-                                                kernel_size=3, padding=1, bias=False))
-        self.double_conv.add_module("bn1",
-                                    nn.BatchNorm2d(mid_channels, track_running_stats=False))
-        self.double_conv.add_module("relu1",
-                                    nn.ReLU(inplace=True))
-        self.double_conv.add_module("conv2",
-                                    nn.Conv2d(mid_channels, out_channels,
-                                                kernel_size=3, padding=1, bias=False))
-        self.double_conv.add_module("bn2",
-                                    nn.BatchNorm2d(out_channels, track_running_stats=False))
-        self.double_conv.add_module("relu2",
-                                    nn.ReLU(inplace=True))
-        
+        self.double_conv.add_module(
+            "conv1",
+            nn.Conv2d(in_channels, mid_channels, kernel_size=3, padding=1, bias=False),
+        )
+        self.double_conv.add_module(
+            "bn1", nn.BatchNorm2d(mid_channels, track_running_stats=False)
+        )
+        self.double_conv.add_module("relu1", nn.ReLU(inplace=True))
+        self.double_conv.add_module(
+            "conv2",
+            nn.Conv2d(mid_channels, out_channels, kernel_size=3, padding=1, bias=False),
+        )
+        self.double_conv.add_module(
+            "bn2", nn.BatchNorm2d(out_channels, track_running_stats=False)
+        )
+        self.double_conv.add_module("relu2", nn.ReLU(inplace=True))
+
         self.residual = None
         if residual == True:
-            self.residual = nn.Conv2d(in_channels, out_channels,
-                                        kernel_size=1, padding=0, bias=False)
+            self.residual = nn.Conv2d(
+                in_channels, out_channels, kernel_size=1, padding=0, bias=False
+            )
 
     def forward(self, x):
         out = self.double_conv(x)
@@ -89,6 +102,7 @@ class DoubleConv(nn.Module):
             out = torch.add(x, out)
 
         return out
+
 
 class Down(nn.Module):
     """Downscaling with maxpool then double conv"""
@@ -102,41 +116,63 @@ class Down(nn.Module):
         x = self.pool(x)
         return self.conv(x)
 
+
 class Up(nn.Module):
     """Upscaling then double conv"""
 
-    def __init__(self, in_channels, out_channels,
-                 learnable_pos=None, bilinear=False, attention=False, residual=True, skip=True):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        learnable_pos=None,
+        bilinear=False,
+        attention=False,
+        residual=True,
+        skip=True,
+    ):
         super(Up, self).__init__()
 
         # Learnable position setting
         pos_dim = in_channels - (out_channels * 2)
         if pos_dim == 0:
             assert learnable_pos == None
-        
+
         self.learnable_pos = learnable_pos
 
         # if bilinear, use the normal convolutions to reduce the number of channels
         self.upsample = nn.Sequential()
         if bilinear:
-            self.upsample.add_module('upsample', nn.Upsample(scale_factor=2,
-                                                             mode='bilinear',
-                                                             align_corners=True))
-            self.upsample.add_module('upsample_conv', nn.Conv2d(in_channels - pos_dim, out_channels,
-                                                                kernel_size=3, stride=1,
-                                                                padding=1, bias=False))
+            self.upsample.add_module(
+                "upsample",
+                nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True),
+            )
+            self.upsample.add_module(
+                "upsample_conv",
+                nn.Conv2d(
+                    in_channels - pos_dim,
+                    out_channels,
+                    kernel_size=3,
+                    stride=1,
+                    padding=1,
+                    bias=False,
+                ),
+            )
         else:
-            self.upsample.add_module('upsample', nn.ConvTranspose2d(in_channels - pos_dim,
-                                                                    out_channels,
-                                                                    kernel_size=2,
-                                                                    stride=2))
+            self.upsample.add_module(
+                "upsample",
+                nn.ConvTranspose2d(
+                    in_channels - pos_dim, out_channels, kernel_size=2, stride=2
+                ),
+            )
 
         self.attn_gate = None
         if attention:
-            self.attn_gate = AttentionGate(out_channels, out_channels, out_channels // 2)
-        
+            self.attn_gate = AttentionGate(
+                out_channels, out_channels, out_channels // 2
+            )
+
         self.skip = skip
-        if not skip: # Don't use skip connection
+        if not skip:  # Don't use skip connection
             in_channels = out_channels
         self.double_conv = DoubleConv(in_channels, out_channels, residual=residual)
 
@@ -148,8 +184,7 @@ class Up(nn.Module):
         diffY = torch.tensor([x_res.size()[2] - x.size()[2]])
         diffX = torch.tensor([x_res.size()[3] - x.size()[3]])
 
-        x = F.pad(x, [diffX // 2, diffX - diffX // 2,
-                      diffY // 2, diffY - diffY // 2])
+        x = F.pad(x, [diffX // 2, diffX - diffX // 2, diffY // 2, diffY - diffY // 2])
         # if you have padding issues, see
         # https://github.com/HaiyongJiang/U-Net-Pytorch-Unstructured-Buggy/commit/0e854509c2cea854e247a9c615f175f76fbb2e3a
         # https://github.com/xiaopeng-liao/Pytorch-UNet/commit/8ebac70e633bac59fc22bb5195e513d5832fb3bd
@@ -172,6 +207,7 @@ class Up(nn.Module):
 
         return out
 
+
 class OutConv(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(OutConv, self).__init__()
@@ -180,15 +216,19 @@ class OutConv(nn.Module):
     def forward(self, x):
         return self.conv(x)
 
+
 class LearnablePosition(nn.Module):
     def __init__(self, emb_dim, x_size, y_size):
         super(LearnablePosition, self).__init__()
-        self.learnable_pos = nn.Parameter(torch.zeros(emb_dim, y_size, x_size), requires_grad=True)
+        self.learnable_pos = nn.Parameter(
+            torch.zeros(emb_dim, y_size, x_size), requires_grad=True
+        )
 
     def forward(self, x):
-        x = x + torch.vstack([self.learnable_pos.unsqueeze(0)]*x.shape[0])
+        x = x + torch.vstack([self.learnable_pos.unsqueeze(0)] * x.shape[0])
 
         return x
+
 
 class AttentionGate(nn.Module):
     def __init__(self, feature_x, feature_g, inter):
@@ -196,18 +236,18 @@ class AttentionGate(nn.Module):
 
         self.w_g = nn.Sequential(
             nn.Conv2d(feature_g, inter, kernel_size=1, stride=1, padding=0, bias=True),
-            nn.BatchNorm2d(inter, track_running_stats=False)
+            nn.BatchNorm2d(inter, track_running_stats=False),
         )
 
         self.w_x = nn.Sequential(
             nn.Conv2d(feature_x, inter, kernel_size=1, stride=1, padding=0, bias=True),
-            nn.BatchNorm2d(inter, track_running_stats=False)
+            nn.BatchNorm2d(inter, track_running_stats=False),
         )
 
         self.w_psi = nn.Sequential(
             nn.Conv2d(inter, 1, kernel_size=1, stride=1, padding=0, bias=True),
             nn.BatchNorm2d(1, track_running_stats=False),
-            nn.Sigmoid()
+            nn.Sigmoid(),
         )
 
         self.relu = nn.ReLU(inplace=True)
@@ -220,8 +260,11 @@ class AttentionGate(nn.Module):
 
         return x * psi
 
+
 class LCN2DLayer(nn.Module):
-    def __init__(self, in_channels, out_channels, x_size, y_size, kernel=3, with_affine=False):
+    def __init__(
+        self, in_channels, out_channels, x_size, y_size, kernel=3, with_affine=False
+    ):
         super(LCN2DLayer, self).__init__()
         self.c = in_channels
         self.oc = out_channels
@@ -230,18 +273,22 @@ class LCN2DLayer(nn.Module):
 
         weight_shape = [self.c, self.w, self.h, self.oc, kernel, kernel]
         bias_shape = [self.w, self.h, self.oc]
-        self.weights = nn.Parameter(torch.zeros(weight_shape, dtype=torch.float32), requires_grad=True)
-        self.bias = nn.Parameter(torch.zeros(bias_shape, dtype=torch.float32), requires_grad=True)
+        self.weights = nn.Parameter(
+            torch.zeros(weight_shape, dtype=torch.float32), requires_grad=True
+        )
+        self.bias = nn.Parameter(
+            torch.zeros(bias_shape, dtype=torch.float32), requires_grad=True
+        )
         self.kernel = kernel
         self.with_affine = with_affine
 
     def _symm_pad(self, x: torch.Tensor, padding: Tuple[int, int, int, int]):
         h, w = x.shape[-2:]
         left, right, top, bottom = padding
-    
+
         x_idx = np.arange(-left, w + right)
         y_idx = np.arange(-top, h + bottom)
-    
+
         def reflect(x, minx, maxx):
             """ Reflects an array around two points making a triangular waveform that ramps up
             and down,  allowing for pad lengths greater than the input length """
@@ -249,7 +296,9 @@ class LCN2DLayer(nn.Module):
             double_rng = 2 * rng
             mod = np.fmod(x - minx, double_rng)
             normed_mod = np.where(mod < 0, mod + double_rng, mod)
-            out = np.where(normed_mod >= rng, double_rng - normed_mod, normed_mod) + minx
+            out = (
+                np.where(normed_mod >= rng, double_rng - normed_mod, normed_mod) + minx
+            )
 
             return np.array(out, dtype=x.dtype)
 
@@ -267,7 +316,7 @@ class LCN2DLayer(nn.Module):
         for k in range(self.oc):
             for i in range(self.kernel):
                 for j in range(self.kernel):
-                    tensor_crop = pad_x[:, :, i:i + self.w, j:j + self.h]
+                    tensor_crop = pad_x[:, :, i : i + self.w, j : j + self.h]
                     weight_filter = self.weights[:, :, :, k, i, j]
                     lcn = torch.sum(weight_filter * tensor_crop, dim=1)
 
@@ -276,6 +325,8 @@ class LCN2DLayer(nn.Module):
                     else:
                         result[k] = result[k] + lcn
 
-        oc_result = torch.cat([torch.reshape(t, [-1, 1, self.w, self.h]) for t in result], dim=1)
+        oc_result = torch.cat(
+            [torch.reshape(t, [-1, 1, self.w, self.h]) for t in result], dim=1
+        )
 
         return oc_result

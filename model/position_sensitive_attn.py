@@ -4,10 +4,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-__all__ = ['axial26s', 'axial50s', 'axial50m', 'axial50l']
+__all__ = ["axial26s", "axial50s", "axial50m", "axial50l"]
+
 
 class qkv_transform(nn.Conv1d):
     """Conv1d for qkv_transform"""
+
 
 def conv1x1(in_planes, out_planes, stride=1):
     """1x1 convolution"""
@@ -15,8 +17,16 @@ def conv1x1(in_planes, out_planes, stride=1):
 
 
 class AxialAttention(nn.Module):
-    def __init__(self, in_planes, out_planes, groups=8, kernel_size=56,
-                 stride=1, bias=False, width=False):
+    def __init__(
+        self,
+        in_planes,
+        out_planes,
+        groups=8,
+        kernel_size=56,
+        stride=1,
+        bias=False,
+        width=False,
+    ):
         assert (in_planes % groups == 0) and (out_planes % groups == 0)
         super(AxialAttention, self).__init__()
         self.in_planes = in_planes
@@ -29,21 +39,24 @@ class AxialAttention(nn.Module):
         self.width = width
 
         # Multi-head self attention
-        self.qkv_transform = qkv_transform(in_planes, out_planes * 2, kernel_size=1, stride=1,
-                                           padding=0, bias=False)
+        self.qkv_transform = qkv_transform(
+            in_planes, out_planes * 2, kernel_size=1, stride=1, padding=0, bias=False
+        )
         self.bn_qkv = nn.BatchNorm1d(out_planes * 2, track_running_stats=False)
         self.bn_similarity = nn.BatchNorm2d(groups * 3, track_running_stats=False)
-        #self.bn_qk = nn.BatchNorm2d(groups)
-        #self.bn_qr = nn.BatchNorm2d(groups)
-        #self.bn_kr = nn.BatchNorm2d(groups)
+        # self.bn_qk = nn.BatchNorm2d(groups)
+        # self.bn_qr = nn.BatchNorm2d(groups)
+        # self.bn_kr = nn.BatchNorm2d(groups)
         self.bn_output = nn.BatchNorm1d(out_planes * 2, track_running_stats=False)
 
         # Position embedding
-        self.relative = nn.Parameter(torch.randn(self.group_planes * 2, kernel_size * 2 - 1), requires_grad=True)
+        self.relative = nn.Parameter(
+            torch.randn(self.group_planes * 2, kernel_size * 2 - 1), requires_grad=True
+        )
         query_index = torch.arange(kernel_size).unsqueeze(0)
         key_index = torch.arange(kernel_size).unsqueeze(1)
         relative_index = key_index - query_index + kernel_size - 1
-        self.register_buffer('flatten_index', relative_index.view(-1))
+        self.register_buffer("flatten_index", relative_index.view(-1))
         if stride > 1:
             self.pooling = nn.AvgPool2d(stride, stride=stride)
 
@@ -59,23 +72,41 @@ class AxialAttention(nn.Module):
 
         # Transformations
         qkv = self.bn_qkv(self.qkv_transform(x))
-        q, k, v = torch.split(qkv.reshape(N * W, self.groups, self.group_planes * 2, H), [self.group_planes // 2, self.group_planes // 2, self.group_planes], dim=2)
+        q, k, v = torch.split(
+            qkv.reshape(N * W, self.groups, self.group_planes * 2, H),
+            [self.group_planes // 2, self.group_planes // 2, self.group_planes],
+            dim=2,
+        )
 
         # Calculate position embedding
-        all_embeddings = torch.index_select(self.relative, 1, self.flatten_index).view(self.group_planes * 2, self.kernel_size, self.kernel_size)
-        q_embedding, k_embedding, v_embedding = torch.split(all_embeddings, [self.group_planes // 2, self.group_planes // 2, self.group_planes], dim=0)
-        qr = torch.einsum('bgci,cij->bgij', q, q_embedding)
-        kr = torch.einsum('bgci,cij->bgij', k, k_embedding).transpose(2, 3)
-        qk = torch.einsum('bgci, bgcj->bgij', q, k)
+        all_embeddings = torch.index_select(self.relative, 1, self.flatten_index).view(
+            self.group_planes * 2, self.kernel_size, self.kernel_size
+        )
+        q_embedding, k_embedding, v_embedding = torch.split(
+            all_embeddings,
+            [self.group_planes // 2, self.group_planes // 2, self.group_planes],
+            dim=0,
+        )
+        qr = torch.einsum("bgci,cij->bgij", q, q_embedding)
+        kr = torch.einsum("bgci,cij->bgij", k, k_embedding).transpose(2, 3)
+        qk = torch.einsum("bgci, bgcj->bgij", q, k)
         stacked_similarity = torch.cat([qk, qr, kr], dim=1)
-        stacked_similarity = self.bn_similarity(stacked_similarity).view(N * W, 3, self.groups, H, H).sum(dim=1)
-        #stacked_similarity = self.bn_qr(qr) + self.bn_kr(kr) + self.bn_qk(qk)
+        stacked_similarity = (
+            self.bn_similarity(stacked_similarity)
+            .view(N * W, 3, self.groups, H, H)
+            .sum(dim=1)
+        )
+        # stacked_similarity = self.bn_qr(qr) + self.bn_kr(kr) + self.bn_qk(qk)
         # (N, groups, H, H, W)
         similarity = F.softmax(stacked_similarity, dim=3)
-        sv = torch.einsum('bgij,bgcj->bgci', similarity, v)
-        sve = torch.einsum('bgij,cij->bgci', similarity, v_embedding)
-        stacked_output = torch.cat([sv, sve], dim=-1).view(N * W, self.out_planes * 2, H)
-        output = self.bn_output(stacked_output).view(N, W, self.out_planes, 2, H).sum(dim=-2)
+        sv = torch.einsum("bgij,bgcj->bgci", similarity, v)
+        sve = torch.einsum("bgij,cij->bgci", similarity, v_embedding)
+        stacked_output = torch.cat([sv, sve], dim=-1).view(
+            N * W, self.out_planes * 2, H
+        )
+        output = (
+            self.bn_output(stacked_output).view(N, W, self.out_planes, 2, H).sum(dim=-2)
+        )
 
         if self.width:
             output = output.permute(0, 2, 1, 3)
@@ -88,27 +119,46 @@ class AxialAttention(nn.Module):
         return output
 
     def reset_parameters(self):
-        self.qkv_transform.weight.data.normal_(0, math.sqrt(1. / self.in_planes))
-        #nn.init.uniform_(self.relative, -0.1, 0.1)
-        nn.init.normal_(self.relative, 0., math.sqrt(1. / self.group_planes))
+        self.qkv_transform.weight.data.normal_(0, math.sqrt(1.0 / self.in_planes))
+        # nn.init.uniform_(self.relative, -0.1, 0.1)
+        nn.init.normal_(self.relative, 0.0, math.sqrt(1.0 / self.group_planes))
 
 
 class AxialBlock(nn.Module):
     expansion = 1
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, groups=1,
-                 width=2048, dilation=1, norm_layer=None, kernel_size=(90, 72)):
+    def __init__(
+        self,
+        inplanes,
+        planes,
+        stride=1,
+        downsample=None,
+        groups=1,
+        width=2048,
+        dilation=1,
+        norm_layer=None,
+        kernel_size=(90, 72),
+    ):
         super(AxialBlock, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
-        
+
         # width = int(planes * (base_width / 64.))
 
         # Both self.conv2 and self.downsample layers downsample the input when stride != 1
         self.conv_down = conv1x1(inplanes, width)
         self.bn1 = norm_layer(width, track_running_stats=False)
-        self.hight_block = AxialAttention(width, width, groups=groups, kernel_size=kernel_size[0])
-        self.width_block = AxialAttention(width, width, groups=groups, kernel_size=kernel_size[1], stride=stride, width=True)
+        self.hight_block = AxialAttention(
+            width, width, groups=groups, kernel_size=kernel_size[0]
+        )
+        self.width_block = AxialAttention(
+            width,
+            width,
+            groups=groups,
+            kernel_size=kernel_size[1],
+            stride=stride,
+            width=True,
+        )
         self.conv_up = conv1x1(width, planes * self.expansion)
         self.bn2 = norm_layer(planes * self.expansion, track_running_stats=False)
         self.relu = nn.ReLU(inplace=True)
